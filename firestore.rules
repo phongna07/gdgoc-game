@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validScore(v) {
+      return v.keys().hasAll(['name', 'playerId', 'score', 'bugs', 'hazards', 'accuracy', 'bestStreak', 'gold', 'createdAt'])
+        && v.name is string && v.name.size() >= 2 && v.name.size() <= 24
+        && v.playerId is string && v.playerId.size() <= 32
+        && v.score is int && v.score >= 0 && v.score <= 200000
+        && v.bugs is int && v.bugs >= 0 && v.bugs <= 500
+        && v.hazards is int && v.hazards >= 0 && v.hazards <= 500
+        && v.accuracy is int && v.accuracy >= 0 && v.accuracy <= 100
+        && v.bestStreak is int && v.bestStreak >= 0 && v.bestStreak <= v.bugs
+        && v.gold is int && v.gold >= 0 && v.gold <= v.bugs
+        && v.createdAt == request.time;
+    }
+    match /scores/{runId} {
+      allow read: if true;
+      allow create: if validScore(request.resource.data)
+        && request.resource.data.keys().hasOnly(['name', 'playerId', 'score', 'bugs', 'hazards', 'accuracy', 'bestStreak', 'gold', 'createdAt'])
+        && getAfter(/databases/$(database)/documents/entries/$(runId)).data.playerId == request.resource.data.playerId;
+      allow update, delete: if false;
+    }
+    match /entries/{runId} {
+      // Student emails may be read only through trusted admin tooling.
+      allow read, update, delete: if false;
+      allow create: if request.resource.data.keys().hasOnly(['name', 'email', 'playerId', 'score', 'createdAt'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.email.matches('^[a-z0-9._%+-]+@vinuni[.]edu[.]vn$')
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.name == getAfter(/databases/$(database)/documents/scores/$(runId)).data.name
+        && request.resource.data.playerId == getAfter(/databases/$(database)/documents/scores/$(runId)).data.playerId
+        && request.resource.data.score == getAfter(/databases/$(database)/documents/scores/$(runId)).data.score;
+    }
+    match /leaderboard/{playerId} {
+      allow read: if true;
+      // Compare the complete public score, excluding only the leaderboard's run ID.
+      function validBest() {
+        let v = request.resource.data;
+        let run = getAfter(/databases/$(database)/documents/scores/$(v.runId)).data;
+        return validScore(v) && v.playerId == playerId
+          && v.keys().hasOnly(['name', 'playerId', 'score', 'bugs', 'hazards', 'accuracy', 'bestStreak', 'gold', 'createdAt', 'runId'])
+          && run.name == v.name && run.playerId == v.playerId && run.score == v.score
+          && run.bugs == v.bugs && run.hazards == v.hazards && run.accuracy == v.accuracy
+          && run.bestStreak == v.bestStreak && run.gold == v.gold && run.createdAt == v.createdAt;
+      }
+      allow create: if validBest();
+      allow update: if validBest() && request.resource.data.score > resource.data.score;
+      allow delete: if false;
+    }
+  }
+}
